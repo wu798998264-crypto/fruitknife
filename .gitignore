@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# 打包产物
+*.exe
+*.spec.bak
+_work/
+
+# 运行期生成
+selftest.log
+guitest.log
+guitest_out/
+_progress.jsonl
+_debug.log
+_batch_debug.log
+*.mp4
+*.jpg
+info.json
+
+# ffmpeg 二进制（体积大，请自行下载，见 README）
+ffmpeg_bin/
+
+# 日志与临时文件
+*.log
+*.tmp
+*.bak
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
+
+# 原始样本（本项目起点，仅作参考，不入库）
+_ref/
