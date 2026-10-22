@@ -27,12 +27,27 @@
 
 ## 快速开始
 
-### 1. 环境要求
+### 方式一：直接使用打包好的桌面版（推荐给普通用户）
+
+1. 解压发行包（**必须先解压**，不能直接在压缩包里双击）
+2. 双击 **`安装水果刀.exe`** —— 会在桌面创建带 logo 的「水果刀」快捷方式，
+   同时在开始菜单建「水果刀」程序组
+3. 双击桌面图标即可使用
+
+安装器不复制任何程序文件、不写系统目录，属于**绿色便携版**：
+快捷方式指向程序所在位置，把整个文件夹挪到哪都能用。
+卸载只需运行 `安装水果刀.exe --uninstall`（或删掉开始菜单里的「卸载水果刀」）。
+
+> 桌面上若已存在同名**文件夹**，快捷方式会自动命名为「水果刀 启动」以免混淆。
+
+### 方式二：从源码运行（开发者）
+
+#### 1. 环境要求
 
 - Windows 10/11 x64
 - Python 3.12（签名模块按 3.12 编写；3.13 也可运行）
 
-### 2. 安装依赖
+#### 2. 安装依赖
 
 ```bash
 git clone <this-repo>
@@ -42,13 +57,13 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 3. 准备 ffmpeg
+#### 3. 准备 ffmpeg
 
 下载 ffmpeg 并放到 `ffmpeg_bin/ffmpeg-N-*-win64-gpl-shared/bin/`（目录名可任意，
 程序按 `ffmpeg_bin/*/bin/ffmpeg.exe` 或 `ffmpeg_bin/bin/ffmpeg.exe` 查找）。
 仓库不含该二进制（体积过大），可从 [ffmpeg.org](https://ffmpeg.org/download.html) 获取。
 
-### 4. 运行
+#### 4. 运行
 
 ```bash
 python run.py
@@ -94,6 +109,8 @@ app/
 hg_src/
   1.py                 视频解析端点（Python 版）
   liushen/flurl/       请求签名模块（xgorgon / helios / medusa / sign_proto）
+install.py             桌面安装器（快捷方式 / 开始菜单 / 卸载入口 / 右键菜单）
+install.spec           安装器独立打包配置
 hongguo.spec           PyInstaller 打包配置
 ```
 
@@ -129,6 +146,40 @@ PyInstaller 打包后 `sys.executable` 指向 GUI 程序自身，直接
 `_on_download_all`（手动点「开始下载」走的路径）必须在函数内自行拼出
 `progress_file`，不能复用 `task._pf` —— 该字段在此刻仍为空串，
 会让子进程 `open('', 'w')` 抛 `FileNotFoundError`。
+
+### 创建桌面快捷方式（install.py）
+
+沙箱/受限环境里 `WScript.Shell` 的 COM 实例化会被安全策略拦截，
+所以安装器用 `ctypes` 直接调 `IShellLink` COM 接口。**这里有三个极易踩的坑**，
+症状都是「lnk 文件从 280 字节膨胀到 40KB，第三个链接 Save 直接失败」：
+
+1. **vtable 索引必须实测，不能凭记忆。** `IShellLinkW` 的方法顺序是
+   `3 GetPath | 5 SetIDList | 7 SetDescription | 9 SetWorkingDirectory |
+   11 SetArguments | 17 SetIconLocation | 20 SetPath`。
+   把 `5` 当成 `SetDescription` 用是错的 —— 它实际是 `SetIDList(LPCIDLIST)`，
+   拿字符串去调会把垃圾数据写进 lnk 的 ExtraData。
+   排查手法：每个索引单独起一个进程调用，避免一个崩溃影响其他。
+
+2. **`IPersistFile::Save` 的 BOOL 参数必须用 `wintypes.BOOL`（4 字节）**，
+   用 `ctypes.c_bool`（1 字节）会让参数栈错位，lnk 头里的 FileSize 被写成 0。
+
+3. **`CoInitializeEx` 返回 `S_FALSE(1)` 表示本线程已初始化过 COM**，
+   这时不能再 `CoUninitialize`，否则 COM 引用计数错乱。
+   同时要显式 `Release` COM 对象，否则残留状态会串到下一个 lnk。
+
+图标方案：把 `IconLocation` 指向 **exe 自身** —— PyInstaller 已把 ico 嵌进
+exe 资源（`ExtractIconExW(exe, -1, ...)` 可取到图标组），这样桌面一定显示
+专属 logo，且不依赖外部 ico 文件路径。
+
+判定 lnk 好坏**不要**用 `SHGetFileInfo` 判图标（对系统 dll 也返回默认图标，
+是纯假阴性），用 `ShellExecuteW(None, 'open', lnk, ...)` 返回值 > 32 才算数。
+
+### 窗口图标
+
+`main()` 必须把 `icon_path` 传给 `MainWindow`，否则任务栏/标题栏/Alt-Tab
+全是默认图标。优先用多尺寸 `app_icon.ico`（16/24/32/48/64/128/256），
+小尺寸下比单张 PNG 清晰得多。注意 `app_icon.ico` 要写进 `hongguo.spec` 的
+`datas`，否则打包后找不到。
 
 ---
 

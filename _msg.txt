@@ -1,0 +1,14 @@
+docs: 补充桌面版安装说明、构建指南与踩坑记录
+
+README
+- 快速开始拆成「直接用桌面版」和「从源码运行」两条路径
+- 项目结构补入 install.py / install.spec
+- 新增「创建桌面快捷方式」章节，记录 IShellLink COM 的三个坑：
+  · vtable 索引必须实测（5 是 SetIDList 不是 SetDescription）
+  · IPersistFile::Save 的 BOOL 必须用 wintypes.BOOL（4 字节）
+  · CoInitializeEx 返回 S_FALSE 时不能再 CoUninitialize
+- 新增「窗口图标」章节：main() 必须传 icon_path，ico 要进 spec 的 datas
+
+新增
+- BUILD.md：完整的打包/瘦身/发行/验证流程，含发布前检查清单与坑速查表
+- 使用说明.txt：面向普通用户的白话说明（含在发行包里）
