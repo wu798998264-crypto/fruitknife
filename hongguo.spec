@@ -13,6 +13,7 @@ a = Analysis(
         ('app/config.py', 'app'),
         ('app/__init__.py', 'app'),
         ('app_icon.png', '.'),
+        ('app_icon.ico', '.'),
         ('hg_src', 'hg_src'),
         ('ffmpeg_bin', 'ffmpeg_bin'),
     ],

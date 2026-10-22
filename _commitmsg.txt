@@ -1,0 +1,23 @@
+feat: 桌面化 —— 安装器、桌面快捷方式、开始菜单
+
+把水果刀从「解压后进目录双击 exe」改成规范的桌面程序体验。
+
+新增
+- install.py：绿色便携版安装器
+  · 桌面创建「水果刀」快捷方式（桌面已有同名文件夹时自动改名为「水果刀 启动」）
+  · 开始菜单创建「水果刀」程序组 + 卸载入口
+  · 注册「设置 → 应用」卸载信息，资源管理器右键加「用水果刀打开」
+  · --uninstall 清理全部快捷方式与注册表项
+- install.spec：把安装器独立打包成 exe，接收方无需装 Python
+
+修复
+- 窗口/任务栏没有图标：main() 算了 icon 路径却从未传给 MainWindow，
+  改为传多尺寸 app_icon.ico，并把 ico 补进打包 datas
+- 重新生成 7 尺寸 ico（16/24/32/48/64/128/256），从 1024×1024 母版盒式降采样
+
+实现要点
+- 快捷方式用 ctypes 直调 IShellLink COM（沙箱禁止 WScript.Shell）
+- 图标指向 exe 自身：PyInstaller 已把 ico 嵌进 exe 资源，不依赖外部 ico 路径
+- IShellLink vtable 索引必须实测：SetDescription 是 7 不是 5（5 是 SetIDList，
+  拿字符串去调会把垃圾写进 lnk，文件膨胀 100 倍且 Save 失败）
+- IPersistFile::Save 的 BOOL 参数要用 wintypes.BOOL（4 字节），不能用 ctypes.c_bool

@@ -2012,8 +2012,11 @@ def main():
     app.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     f = QFont("Microsoft YaHei", 10)
     app.setFont(f)
-    w = MainWindow(app_name=APP_NAME)
-    icon = os.path.join(BASE_DIR, "app_icon.png")
+    # 窗口图标：优先用多尺寸 ico（任务栏/标题栏/Alt-Tab 都会用它）
+    icon_path = os.path.join(BASE_DIR, "app_icon.ico")
+    if not os.path.exists(icon_path):
+        icon_path = os.path.join(BASE_DIR, "app_icon.png")
+    w = MainWindow(app_name=APP_NAME, icon_path=icon_path)
     w.show()
     sys.exit(app.exec_())
 
