@@ -123,3 +123,5 @@ print('done')
 | 右边缘/下边缘拖不动 | `_edge_at()` 入参必须是**全局**坐标 |
 | 快捷方式 lnk 变成 40KB | COM vtable 索引写错，见 README「创建桌面快捷方式」 |
 | 打包后下载子进程不执行 | 冻结产物里 `sys.executable` 指向 GUI 自己，靠 `run.py` 识别 `.py` 参数分发 |
+| 粘贴分享链接报「无法提取 series_id」 | 短链是字母短码，必须跟 302 跳转后从 query 取 `video_id`；详见 README「关于分享链接」 |
+| 分享链接只下到一集 | 页面里 `vid` 是单集 ID、`video_id` 才是 series_id，取错了 |
