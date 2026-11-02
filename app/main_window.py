@@ -1095,8 +1095,17 @@ class MainWindow(QWidget):
             self._start_with_sid(txt, "")
 
     def _resolve_share(self, share_url):
-        """后台解析分享链接 → 拿到 series_id 后回到主线程建任务"""
-        sid = parse_share_url(share_url)
+        """后台解析分享链接 → 拿到 series_id 后回到主线程建任务。
+
+        短链（novelquickapp.com/s/xxx）本身不含数字 ID，
+        必须请求一次让服务端跳转，真实页面里才有 series_id。
+        """
+        sid = ""
+        try:
+            from app.search_index import parse_share_url
+            sid = parse_share_url(share_url) or ""
+        except Exception:
+            sid = ""
         if not sid:
             m = re.search(r'(\d{10,20})', share_url)
             sid = m.group(1) if m else ""

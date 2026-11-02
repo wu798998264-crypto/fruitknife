@@ -187,3 +187,95 @@ def search_more(keyword, passback):
     results, next_pb = _api_search(keyword, offset=0, passback=passback, count=0)
     results.sort(key=lambda x: x.get("_heat_val", 0), reverse=True)
     return results, next_pb
+
+
+# ──────────────────── 分享链接解析 ────────────────────
+_MOBILE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+              "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 "
+              "Mobile/15E148 Safari/604.1")
+
+# 短链跳转后的页面里，剧集 ID 出现的参数名（按优先级）
+_SID_PARAMS = ("series_id", "video_id", "book_id", "vid")
+
+
+def _ids_from_text(text):
+    """从文本里找候选 ID。
+
+    优先看常见键名（series_id / video_id / book_id），
+    找不到再退回页面里的 15~20 位长数字。
+
+    注意：分享页里同时存在 series_id 与单集 vid，
+    必须优先取 series_id，否则会拿到某一集的 ID。
+    """
+    if not text:
+        return ""
+    for key in _SID_PARAMS:
+        m = re.search(r'["\']?%s["\']?\s*[:=]\s*["\']?(\d{10,20})' % key, text)
+        if m:
+            return m.group(1)
+    m = re.search(r'(?<!\d)(\d{15,20})(?!\d)', text)
+    return m.group(1) if m else ""
+
+
+def parse_share_url(share_url, timeout=20):
+    """解析红果分享链接 → series_id。
+
+    短链形如 https://novelquickapp.com/s/7_9cWlOsids/
+    本身不含数字 ID，必须请求一次让服务端 302 跳转到真实页面，
+    真实页面的 query 里带 series_id / video_id。
+
+    返回 series_id 字符串；失败返回 ""。
+    """
+    if not share_url:
+        return ""
+    url = share_url.strip()
+
+    # 1) 链接里已经直接带数字 ID —— 不用发请求
+    direct = _ids_from_text(url)
+    if direct:
+        return direct
+
+    # 2) 短链 → 跟随重定向
+    try:
+        r = _requests.get(url, allow_redirects=True, timeout=timeout,
+                          headers={"User-Agent": _MOBILE_UA})
+        try:
+            r.encoding = r.encoding or "utf-8"
+        except Exception:
+            pass
+    except Exception:
+        return ""
+
+    # 2a) 跳转后的 URL query 里取
+    try:
+        q = dict(parse_qsl(urlsplit(r.url).query))
+        for key in _SID_PARAMS:
+            v = q.get(key, "")
+            if v.isdigit() and 10 <= len(v) <= 20:
+                return v
+    except Exception:
+        pass
+
+    # 2b) 页面正文里取
+    return _ids_from_text(r.text)
+
+
+def resolve_share(share_url, timeout=20):
+    """解析分享链接，返回 (series_id, series_name)。
+
+    拿到 series_id 后顺带查一次名称，好让任务卡片显示剧名
+    （分享页本身只有 id，没有名字）。
+    """
+    sid = parse_share_url(share_url, timeout=timeout)
+    if not sid:
+        return "", ""
+    name = ""
+    try:
+        res, _ = search(sid, sort_by_heat=False)
+        for r in res or []:
+            if str(r.get("series_id")) == sid:
+                name = r.get("series_name") or ""
+                break
+    except Exception:
+        pass
+    return sid, name

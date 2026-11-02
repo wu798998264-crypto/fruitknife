@@ -1,0 +1,22 @@
+fix: 支持红果短链分享链接下载
+
+现象：搜索后下载正常，粘贴分享链接下载失败。
+
+根因
+1. 短链 https://novelquickapp.com/s/7_9cWlOsids/ 本身不含数字 ID，
+   只有字母短码（7_9cWlOsids）。必须请求一次让服务端 302 跳转到
+   真实分享页，页面的 query 里才带 series_id。
+2. 短链跳到 /hongguo/ug/pages/video-animation-share?video_id=...&vid=...，
+   其中 video_id 是剧集 series_id，vid 是某一集的 ID，取错就只会下到一集。
+3. main_window._resolve_share 调用了并不存在的 parse_share_url()，
+   粘贴链接必然抛 NameError。
+
+改动
+- search_index 新增 parse_share_url()：跟重定向 → 从 query/正文提取 ID，
+  参数优先级 series_id > video_id > book_id > vid
+- search_index 新增 resolve_share()：顺带查剧名
+- main_window._resolve_share 改为正确 import 并容错
+
+验证（冻结包内走完整 GUI 流程）
+  粘贴链接 → 正在解析分享链接… → ready 剧名=困兽之战 15 集
+  → 点「开始下载」→ done，产出 12.62 / 9.93 / 6.23 / 13.51 / 13.09 MB …
