@@ -1505,7 +1505,9 @@ class MainWindow(QWidget):
                     if task.states[ep - 1] != s:
                         task.states[ep - 1] = s
                         changed = True
-                # 记录实际使用的清晰度（服务端可能因 bytevc2 强制回退）
+                # 记录实际编码/清晰度（新实现返回 codec；旧字段兼容）
+                if j.get("codec"):
+                    task._actual_codec = j["codec"]
                 if j.get("qual"):
                     task._actual_qual = j["qual"]
 
@@ -1529,9 +1531,17 @@ class MainWindow(QWidget):
                 # 若实际清晰度与用户选择不同（服务端改用 bytevc2 导致回退），
                 # 明确告知，避免用户以为下的是 540p 其实是 1080p
                 qnote = ""
-                aq = getattr(task, "_actual_qual", "")
-                if aq and aq.lower() != (task.qual or "").lower():
-                    qnote = f"（{task.qual} 不可用，实际 {aq}）"
+                ac = getattr(task, "_actual_codec", "")
+                if ac:
+                    fam = ""
+                    try:
+                        from app.hongguo_dl import codec_family as _cf
+                        fam = _cf(ac)
+                    except Exception:
+                        fam = ""
+                    tag = {"hevc": "HEVC", "h264": "H.264",
+                           "bytevc2": "ByteVC2(不可播)"}.get(fam, ac)
+                    qnote = f" · {tag}"
                 self._footer.setText(
                     f"✓ {task.name}: {d_one}/{task.total}"
                     + (f" ({d_err} 失败)" if d_err else "")

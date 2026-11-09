@@ -98,7 +98,11 @@ def is_valid_video(fp, ffmpeg_bin=None):
 
 
 def download_one(sid, vid, ep, sdir, sname, did, iid, qual, ffmpeg=None):
-    """下载单集，返回结果字典"""
+    """下载单集（参考实现 hongguo-downloader 的方式），返回结果字典
+
+    流程：取流（HEVC 优先，排除 bytevc2）→ 下载加密 mp4 →
+    derive_key(spade_a) → CENC-AES-CTR 解密 + moov 重建 → 标准 hvc1 mp4
+    """
     log_path = os.path.join(sdir, "_debug.log")
 
     def log(msg):
@@ -107,294 +111,116 @@ def download_one(sid, vid, ep, sdir, sname, did, iid, qual, ffmpeg=None):
                 f.write(f"[ep{ep}] {msg}\n")
         except: pass
 
+    tmp_path = None
     try:
-        import requests as rq
-        from Crypto.Cipher import AES
-        from urllib.parse import urlsplit, parse_qsl
-        from liushen.flurl.core import core_sixgod
-
-        # 设备指纹池。脚本既可能被当作 app 包内的模块运行，也可能被直接
-        # 以脚本路径启动（此时 `app` 不在 sys.path），所以两种方式都要兜住。
+        # ── 加载设备指纹与下载核心 ─────────────────────────────
+        # 脚本既可能作为 app 包内模块运行，也可能被当脚本直接启动，
+        # 两种导入方式都要兜住。
         DEV = None
+        HG = None
         try:
             from app import devices as DEV
+            from app import hongguo_dl as HG
         except Exception:
             try:
                 import importlib.util as _ilu
                 _here = os.path.dirname(os.path.abspath(__file__))
-                _spec = _ilu.spec_from_file_location(
-                    "_fk_devices", os.path.join(_here, "devices.py"))
-                _mod = _ilu.module_from_spec(_spec)
-                _spec.loader.exec_module(_mod)
-                DEV = _mod
+                for name, fname in (("_fk_devices", "devices.py"),
+                                    ("_fk_hgdl", "hongguo_dl.py")):
+                    _spec = _ilu.spec_from_file_location(
+                        name, os.path.join(_here, fname))
+                    _mod = _ilu.module_from_spec(_spec)
+                    _spec.loader.exec_module(_mod)
+                    if name == "_fk_devices":
+                        DEV = _mod
+                    else:
+                        HG = _mod
             except Exception as _e:
-                log(f"设备指纹模块加载失败: {_e}")
-        if DEV is None:
-            raise RuntimeError("无法加载 app/devices.py")
+                log(f"核心模块加载失败: {_e}")
+        if DEV is None or HG is None:
+            raise RuntimeError("无法加载 app/devices.py 或 app/hongguo_dl.py")
 
-        log(f"START vid={vid[:8]}.. qual={qual} did={did[:8]}..")
+        log(f"START vid={vid[:8]}.. qual={qual}")
 
-        body = {
-            "biz_param": {
-                "detail_page_version": 0, "device_level": 3,
-                "disable_digg_stat": False, "need_all_video_definition": True,
-                "need_mp4_align": False, "use_os_player": False,
-                "use_server_dns": False, "video_platform": 1024,
-            },
-            "mixed_video_id_map": {"1004": [vid]},
-        }
+        # ── 选设备指纹 ──────────────────────────────────────────
+        fp = DEV.by_id(did, iid) or DEV.FINGERPRINTS[0]
+        if not fp.get("device_id"):
+            raise RuntimeError("设备指纹无效")
 
-        body_data = json.loads(json.dumps(body, ensure_ascii=False, separators=(",", ":")))
-        body_bytes = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
-
-        # ── 取设备指纹池 ────────────────────────────────────────
-        # 优先用调用方指定的（did/iid），找不到就用池子里匹配的，
-        # 都不行则按顺序轮换 —— 服务端拉黑某组指纹时能自动切换。
-        fps = []
-        fp = DEV.by_id(did, iid)
-        if fp:
-            fps.append(fp)
-        else:
-            for f in DEV.FINGERPRINTS:
-                if f not in fps:
-                    fps.append(f)
-            if did and iid and did != DEV.DEFAULT_DEVICE_ID:
-                # 调用方带了外部指纹，放到队首优先试
-                ext = dict(DEV.FINGERPRINTS[0])
-                ext.update({"name": "custom", "device_id": did, "install_id": iid})
-                fps.insert(0, ext)
-
-        d1 = None
-        used_fp = None
-        for fpr in fps:
-            rticket = str(int(time.time() * 1000))
-            params = DEV.query_params(fpr, rticket)
-            ua = fpr["ua"]
-            ts = str(int(time.time() * 1000))
-            bh = {
-                "User-Agent": ua,
-                "Accept": "application/json; charset=utf-8,application/x-protobuf",
-                "Content-Type": "application/json; charset=UTF-8",
-                "x-xs-from-web": "0", "x-ss-req-ticket": ts,
-                "x-tt-request-tag": "t=0;n=0", "sdk-version": "2",
-                "passport-sdk-version": "50561",
-                "x-vc-bdturing-sdk-version": "3.7.2.cn",
-            }
-            api_url = (
-                "https://api5-normal-sinfonlineb.fqnovel.com"
-                "/novel/player/multi_video_model/v1/?"
-                + "&".join("%s=%s" % (k, urllib.parse.quote(str(v), safe=""))
-                           for k, v in params.items())
-            )
-            prt = urlsplit(api_url)
-            su = f"{prt.scheme}://{prt.netloc}{prt.path}"
-            pr = dict(parse_qsl(prt.query, keep_blank_values=True))
-            dv = DEV.to_devices_dict(fpr)
-
-            sh, su2 = core_sixgod(surl=su, params=pr, data=body_data,
-                                   devices=dv, header=bh, log=False)
-            try:
-                r = rq.post(su2, headers=sh, data=body_bytes, timeout=15)
-            except Exception as e:
-                log(f"fp[{fpr['name']}] 请求异常: {e}")
-                continue
-            log(f"fp[{fpr['name']}] API HTTP {r.status_code} len={len(r.content)}")
-
-            if not r.content:
-                # 服务端对不被认可的指纹返回 200 + 空体
-                log(f"fp[{fpr['name']}] 空响应（该指纹可能已被服务端拒绝），换下一组")
-                continue
-            try:
-                cand = r.json()
-            except Exception:
-                log(f"fp[{fpr['name']}] 响应非 JSON: {r.content[:120]!r}")
-                continue
-            if vid in (cand.get("data") or {}):
-                d1 = cand
-                used_fp = fpr
-                break
-            log(f"fp[{fpr['name']}] 无目标 vid（keys={list((cand.get('data') or {}).keys())[:3]}）")
-
-        if d1 is None:
+        # ── 取流 ────────────────────────────────────────────────
+        info = HG.fetch_play_url(vid, fp, content_type=None,
+                                  codec_pref="hevc", log=log)
+        url = info.get("url")
+        spade_a = info.get("spade_a")
+        codec = info.get("codec") or ""
+        if not url:
             return {"ep": ep, "status": "error",
-                    "msg": "设备指纹全部被拒（服务端返回空响应），该剧暂时无法下载"}
+                    "msg": "未获取到有效播放地址（接口可能限流，请稍后重试）"}
+        log(f"选中流: codec={codec} ct={info.get('content_type')} "
+            f"dl={info.get('device_level')}")
 
-        ua = used_fp["ua"]
-        vid_data = (d1.get("data") or {}).get(vid)
-        if not vid_data:
-            log(f"NO VID DATA: keys={list(d1.get('data',{}).keys())[:3]}")
-            return {"ep": ep, "status": "error", "msg": "no_vid_data"}
+        # ── 下载 ────────────────────────────────────────────────
+        os.makedirs(sdir, exist_ok=True)
+        fp_out = os.path.join(sdir, f"{sname}_第{ep:02d}集.mp4")
+        tmp_path = fp_out + ".part"
 
-        vm = json.loads(vid_data["video_model"])
+        import time as _t
+        last = [0.0, 0]
 
-        # ── fallback_api：新版是 dict（多包了一层），旧版是字符串 URL ──
-        fa = vm.get("fallback_api")
-        if isinstance(fa, dict):
-            fa = fa.get("fallback_api") or fa.get("url") or ""
-        if not fa:
-            log("NO fallback_api, vm keys=%s" % list(vm.keys())[:6])
-            return {"ep": ep, "status": "error", "msg": "no_fallback_api"}
-        log(f"got fallback_api")
+        def _prog(received, total):
+            now = _t.time()
+            if now - last[0] >= 2.0:
+                last[0] = now
+                last[1] = received
+                try:
+                    if total:
+                        log(f"下载中 {received/1048576:.1f}/{total/1048576:.1f} MB")
+                except Exception:
+                    pass
 
-        r2 = rq.get(fa, headers={"User-Agent": ua}, timeout=15)
-        d2 = r2.json()["video_info"]["data"]
+        received, total = HG.download_stream(url, tmp_path, fp,
+                                              log=log, progress=_prog)
+        if received == 0:
+            raise RuntimeError("下载内容为空，请重试")
+        log(f"下载完成: {received/1048576:.2f} MB"
+            + (f" / {total/1048576:.2f} MB" if total else ""))
 
-        ks = b64d(d2["key_seed"])
-
-        # ── 选清晰度 ────────────────────────────────────────────
-        # 用 fallback_api 的 video_list：那里的 main_url 是 base64 密文，
-        # 解密后指向 CENC 加密流，ffmpeg 的 -decryption_key 能解。
-        #
-        # ⚠ 重要（2026-11-09）：服务端把大部分清晰度改成了 **bytevc2**
-        #   （字节私有加密 HEVC，容器里 codec tag 是 bvc2/0x32637662）。
-        #   ffmpeg 不认识 bvc2 → 报 "Could not find tag for codec none"。
-        #   目前只有 1080p 仍是标准 HEVC（gear_des_key 里标 h265_hvc1）。
-        #   所以选档时要**避开 bytevc2**，回退到标准 HEVC 的那一档。
-        #
-        # gear_des_key 只在 multi_video_model 的 video_list 里，
-        # fallback_api 的 video_list 没有 → 先建 definition→gear 映射。
-        gear_by_def = {}
-        vm_list = vm.get("video_list")
-        if isinstance(vm_list, list):
-            for it in vm_list:
-                d = (it.get("video_meta") or {}).get("definition")
-                if d:
-                    gear_by_def[d.lower()] = it.get("gear_des_key") or ""
-        kid_by_def = {}
-        if isinstance(vm_list, list):
-            for it in vm_list:
-                d = (it.get("video_meta") or {}).get("definition")
-                if d:
-                    kid_by_def[d.lower()] = (it.get("encrypt_info") or {}).get("kid")
-
-        def _is_bytevc2(defn):
-            g = gear_by_def.get(defn, "")
-            return "bytevc2" in g
-
-        def _h(v):
-            return int(v.get("vheight") or 0)
-
-        vl = d2.get("video_list") or {}
-        want = (qual or "540p").lower()
-        qual_key = None
-        if isinstance(vl, dict) and vl:
-            by_def = {}
-            for k, v in vl.items():
-                if isinstance(v, dict) and v.get("definition"):
-                    by_def[v["definition"].lower()] = v
-            # 先按用户要的清晰度找
-            picked = by_def.get(want)
-            if picked is not None and _is_bytevc2(want):
-                # 该档是 bytevc2，ffmpeg 解不了 → 改用标准 HEVC 的档
-                alt = [d for d in by_def if not _is_bytevc2(d)]
-                if alt:
-                    alt.sort(key=lambda d: _h(by_def[d]), reverse=True)
-                    newq = alt[0]
-                    log(f"quality {want} is bytevc2 (ffmpeg unsupported) "
-                        f"-> fallback to {newq}")
-                    picked = by_def[newq]
-                    want = newq
-                else:
-                    log(f"quality {want} is bytevc2 and no standard-HEVC alt")
-            if picked is None:
-                # 没有该清晰度 → 优先挑标准 HEVC 里分辨率最接近的
-                std = [d for d in by_def if not _is_bytevc2(d)] or list(by_def)
-                std.sort(key=lambda d: _h(by_def[d]))
-                picked = by_def[std[len(std) // 2]]
-                want = picked.get("definition")
-            qual_key = picked
-            log("selected quality=%s (definition=%s %sx%s%s)" % (
-                want, picked.get("definition"), picked.get("vwidth"),
-                picked.get("vheight"),
-                " [bytevc2]" if _is_bytevc2(want) else ""))
-        if qual_key is None:
-            # 备选：multi_video_model 自带的 video_list（明文 URL）
-            if isinstance(vm_list, list) and vm_list:
-                for item in vm_list:
-                    if ((item.get("video_meta") or {}).get("definition") or "").lower() == want:
-                        qual_key = item
-                        break
-                if qual_key is None:
-                    qual_key = vm_list[len(vm_list) // 2]
-                log("fallback to vm.video_list (plain URL), quality=%s" % want)
-        if qual_key is None:
-            log("NO video_list")
-            return {"ep": ep, "status": "error", "msg": "no_video_list"}
-
-        # ── 取视频 URL ──────────────────────────────────────────
-        raw_url = qual_key.get("main_url") or ""
-        if raw_url.startswith("http"):
-            # 明文 URL（bytevc2 流，ffmpeg 可能解不了，但仍尝试）
-            ru = raw_url
-            log("plain URL: %s..." % ru[:80])
-        else:
-            # base64 + AES 加密，需解密
-            raw = b64d(raw_url)
-            ciph = raw[4:]; clen = (len(ciph) // 16) * 16; ciph = ciph[:clen]
-            SP = bytes([
-                0x4D,0xD4,0xC2,0xE6,0xB8,0x31,0x62,0x09,0x0E,0x52,0xB3,0xC7,0xA6,0x73,0x3B,0xA4,
-                0x1C,0xB2,0x46,0x2B,0x82,0x9A,0xB5,0x8A,0x19,0x6B,0x39,0xDB,0x57,0x17,0x75,0x24,
-                0xF4,0x9B,0xAF,0x7F,0x08,0xE8,0xD6,0x8D,0x26,0xA7,0x2E,0x37,0xC1,0xA9,0x5A,0x2F,
-                0x1F,0x05,0xA5,0x18,0x92,0xAE,0xF2,0x94,0x97,0x32,0xB6,0x2A,0x38,0xAA,0xDD,0x58,
-            ])
-            h1 = hashlib.sha512(ks).digest(); h2 = hashlib.sha512(h1 + SP).digest()
-            aes = AES.new(h2[:16], AES.MODE_CBC, iv=h2[16:32])
-            pl = aes.decrypt(ciph)
-            if pl:
-                pad = pl[-1]
-                if 1 <= pad <= 16 and pad <= len(pl): pl = pl[:-pad]
-            ru = pl.rstrip(b"\x00").decode()
-            log(f"decrypted URL: {ru[:80]}...")
-
-        # 内容密钥（ffmpeg -decryption_key 用）
-        # 优先用 encrypt_info.kid —— 服务端标了 encryption_method=cenc-aes-ctr，
-        # 这时 CENC 的解密密钥就是 KID 本身（16 字节）。
-        # 没有 kid 时退回旧的 derive_content_key(spade_a) 派生方式。
-        ck = None
-        kid_hex = kid_by_def.get(want)
-        if kid_hex:
+        # ── CENC 解密 + moov 重建 ───────────────────────────────
+        if spade_a:
+            key = HG.derive_key(spade_a)
+            if not key:
+                raise RuntimeError("Key 派生失败（加密信息格式变更）")
+            log(f"derive_key: {key.hex()}")
+            HG.decrypt_mp4_file(tmp_path, fp_out, key, log=log)
             try:
-                ck = bytes.fromhex(kid_hex)
-                log("using kid as decryption key: %s" % ck.hex())
+                os.remove(tmp_path)
             except Exception:
-                ck = None
-        if ck is None:
-            spade = None
-            if isinstance(qual_key, dict):
-                ei = qual_key.get("encrypt_info") or {}
-                spade = ei.get("spade_a") or qual_key.get("spade_a")
-            if not spade:
-                log("NO spade_a/kid")
-                return {"ep": ep, "status": "error", "msg": "no_content_key"}
-            ck = derive_content_key(spade)
-            log("using derived key: %s" % ck.hex())
+                pass
+        else:
+            # 未加密流，直接改名
+            try:
+                os.replace(tmp_path, fp_out)
+            except Exception:
+                import shutil
+                shutil.copyfile(tmp_path, fp_out)
+                os.remove(tmp_path)
 
-        if not ffmpeg: ffmpeg = find_ffmpeg()
-        if not ffmpeg:
-            log(f"NO FFMPEG")
-            return {"ep": ep, "status": "error", "msg": "no_ffmpeg"}
-
-        fp = os.path.join(sdir, f"{sname}_第{ep:02d}集.mp4")
-        ss = subprocess.run(
-            [ffmpeg, "-y", "-decryption_key", ck.hex(), "-i", ru,
-             "-c", "copy", "-movflags", "+faststart", "-loglevel", "error", fp],
-            capture_output=True, timeout=300,
-            creationflags=0x08000000 if sys.platform == "win32" else 0,
-        )
-        stderr = ss.stderr.decode(errors="replace")[:200] if ss.stderr else ""
-        log(f"ffmpeg rc={ss.returncode}, stderr={stderr}")
-        if ss.returncode == 0 and os.path.exists(fp) and os.path.getsize(fp) > 0:
-            return {"ep": ep, "status": "done", "qual": want,
-                    "fallback": (want or "").lower() != (qual or "").lower()}
-        # ffmpeg 失败时给出可读原因（bytevc2 是最常见的一种）
-        if "codec none" in stderr or "Could not find tag" in stderr:
-            log("该清晰度为 bytevc2 私有加密流，ffmpeg 无法处理")
-            return {"ep": ep, "status": "error", "msg": "bytevc2_unsupported"}
-        return {"ep": ep, "status": "error", "msg": "ffmpeg_fail"}
+        if os.path.exists(fp_out) and os.path.getsize(fp_out) > 0:
+            log(f"done: {fp_out} ({os.path.getsize(fp_out)/1048576:.2f} MB)")
+            fam = HG.codec_family(codec)
+            return {"ep": ep, "status": "done", "codec": codec,
+                    "hevc": fam == "hevc"}
+        raise RuntimeError("输出文件为空")
     except Exception as e:
         log(f"EXCEPTION: {type(e).__name__}: {e}")
         log(traceback.format_exc())
-        return {"ep": ep, "status": "error", "msg": f"{type(e).__name__}:{str(e)[:60]}"}
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+        return {"ep": ep, "status": "error",
+                "msg": f"{type(e).__name__}:{str(e)[:60]}"}
 
 
 def main():
@@ -480,8 +306,7 @@ def main():
             ok += 1; continue
         # 文件有效但进度里没标记 → 补标记（不重复下载）
         if is_valid_video(fp, ffmpeg):
-            write_progress(pf, {"sid": sid, "ep": ep, "status": "done",
-                                "qual": res.get("qual", qual)})
+            write_progress(pf, {"sid": sid, "ep": ep, "status": "done"})
             ok += 1; continue
         try:
             r = download_one(sid, vid, ep, sdir, sname, did, iid, qual, ffmpeg)

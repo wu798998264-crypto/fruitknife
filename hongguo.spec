@@ -13,6 +13,7 @@ a = Analysis(
         ('app/config.py', 'app'),
         ('app/__init__.py', 'app'),
         ('app/devices.py', 'app'),
+        ('app/hongguo_dl.py', 'app'),
         ('app_icon.png', '.'),
         ('app_icon.ico', '.'),
         ('hg_src', 'hg_src'),
