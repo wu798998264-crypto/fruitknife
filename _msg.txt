@@ -1,0 +1,31 @@
+feat: 下载实现整体替换为 hongguo-downloader 方案
+
+用户提供了参考软件 hongguo-downloader（Electron 版），
+将其 src/native/hongguo.js + main.js 的下载实现逐函数移植为 Python。
+
+核心变化（app/hongguo_dl.py，新增 ~700 行）
+- device_level=4（旧实现用 3）：4 才能拿到 bytevc1（标准 HEVC/hvc1）；
+  3 对部分剧集只给 bytevc2（字节私有编码，ffmpeg 无法解码）
+- content_type 自动回退：官方剧 1004 / 用户投稿 1001 / 1003 / 1002，
+  传错会返回 101000，所以按优先级轮询并记住上次成功的类型
+- 选流：遍历 video_list，codec_type 归一化后排除 bytevc2，
+  在 HEVC 族里选清晰度最高（definition > 像素 > 编码 > 码率）
+- 直接用 video_list 的明文 main_url 下载，不再需要
+  fallback_api / key_seed / AES-CBC URL 解密那一整条链
+- 自研 CENC 解密（不再依赖 ffmpeg -decryption_key）：
+  · MP4 box 解析 → stbl/stsz/stco/stsc/senc/tenc
+  · spade_a → derive_key → AES-128-ECB 生成 CTR 密钥流
+  · 按 senc 的 IV + subsample 表逐 sample 解密
+  · moov 重建：encv/enca → 真实 fourcc（从 sinf/frma 还原，
+    不写死 hvc1）、删 senc/saio/saiz/sgpd/sbgp、修正 stco/co64 偏移
+- 下载 403/401 时带 Referer 重试
+- 输出标准 hvc1 HEVC mp4，可直接播放
+
+UI
+- 任务完成时底部状态栏显示实际编码（HEVC / H.264 等）
+
+验证
+- 源码模式 + 冻结包均通过：codec=bytevc1 → 下载 26.98MB →
+  derive_key → 解密 24821 个 sample → 输出 hevc/hvc1 1920x1080 26.79MB
+- hongguo_dl.py 补进 hongguo.spec datas
+- 顺带修掉一个隐患：进度补标记分支引用了未定义的 res 变量
