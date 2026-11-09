@@ -53,6 +53,14 @@ FONT_UI = '"SF Pro Text","PingFang SC","Helvetica Neue","Microsoft YaHei UI","Se
 _DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 _MOBILE_UA = "Mozilla/5.0 (Linux; Android 9; 2509FPN0BC) AppleWebKit/537.36"
 
+# 设备指纹（真实注册过的；旧的假 ID 已被服务端拉黑，详见 app/devices.py）
+try:
+    from app.devices import DEFAULT_DEVICE_ID as _DEFAULT_DEVICE_ID
+    from app.devices import DEFAULT_INSTALL_ID as _DEFAULT_INSTALL_ID
+except Exception:
+    _DEFAULT_DEVICE_ID = "4368802900374539"
+    _DEFAULT_INSTALL_ID = "4368802899821595"
+
 # 本地版：功能全开放，不设任何等级 / 集数限制
 
 from PyQt5.QtWidgets import (
@@ -1238,8 +1246,8 @@ class MainWindow(QWidget):
         with open(os.path.join(sdir, "info.json"), "w", encoding="utf-8") as f:
             json.dump({"name": task.name, "sid": sid, "total": task.total}, f)
 
-        did = os.getenv("DUANJU_DEVICE_ID", "11223344556677889900")
-        iid = os.getenv("DUANJU_INSTALL_ID", "99887766554433221100")
+        did = os.getenv("DUANJU_DEVICE_ID", _DEFAULT_DEVICE_ID)
+        iid = os.getenv("DUANJU_INSTALL_ID", _DEFAULT_INSTALL_ID)
         cfg = {
             "sid": sid, "vids": vids, "sname": safe, "sdir": sdir,
             "qual": task.qual, "did": did, "iid": iid,
@@ -1324,8 +1332,8 @@ class MainWindow(QWidget):
         if not vids:
             return
 
-        did = os.getenv("DUANJU_DEVICE_ID", "11223344556677889900")
-        iid = os.getenv("DUANJU_INSTALL_ID", "99887766554433221100")
+        did = os.getenv("DUANJU_DEVICE_ID", _DEFAULT_DEVICE_ID)
+        iid = os.getenv("DUANJU_INSTALL_ID", _DEFAULT_INSTALL_ID)
         cfg = {
             "sid": sid, "vids": vids, "sname": safe,
             "sdir": sdir, "qual": task.qual,
@@ -1380,8 +1388,8 @@ class MainWindow(QWidget):
         if ep - 1 < len(task.states):
             task.states[ep - 1] = "pending"
 
-        did = os.getenv("DUANJU_DEVICE_ID", "11223344556677889900")
-        iid = os.getenv("DUANJU_INSTALL_ID", "99887766554433221100")
+        did = os.getenv("DUANJU_DEVICE_ID", _DEFAULT_DEVICE_ID)
+        iid = os.getenv("DUANJU_INSTALL_ID", _DEFAULT_INSTALL_ID)
         cfg = {
             "sid": sid, "vids": [vid], "sname": safe, "sdir": sdir,
             "qual": task.qual, "did": did, "iid": iid,
@@ -1497,6 +1505,9 @@ class MainWindow(QWidget):
                     if task.states[ep - 1] != s:
                         task.states[ep - 1] = s
                         changed = True
+                # 记录实际使用的清晰度（服务端可能因 bytevc2 强制回退）
+                if j.get("qual"):
+                    task._actual_qual = j["qual"]
 
             d_one = sum(1 for s in task.states if s == "done")
             d_err = sum(1 for s in task.states if s == "error")
@@ -1515,9 +1526,16 @@ class MainWindow(QWidget):
 
                 if sid in self._cards:
                     self._cards[sid].refresh()
+                # 若实际清晰度与用户选择不同（服务端改用 bytevc2 导致回退），
+                # 明确告知，避免用户以为下的是 540p 其实是 1080p
+                qnote = ""
+                aq = getattr(task, "_actual_qual", "")
+                if aq and aq.lower() != (task.qual or "").lower():
+                    qnote = f"（{task.qual} 不可用，实际 {aq}）"
                 self._footer.setText(
                     f"✓ {task.name}: {d_one}/{task.total}"
                     + (f" ({d_err} 失败)" if d_err else "")
+                    + qnote
                 )
                 changed = True
 

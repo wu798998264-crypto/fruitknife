@@ -15,6 +15,13 @@ if __package__ in (None, ""):
 
 
 def _selftest():
+    # 自检用设备指纹：真实注册过的（旧的假 ID 已被服务端拉黑）
+    try:
+        from app.devices import (DEFAULT_DEVICE_ID as _SELFTEST_DID,
+                                 DEFAULT_INSTALL_ID as _SELFTEST_IID)
+    except Exception:
+        _SELFTEST_DID = "4368802900374539"
+        _SELFTEST_IID = "4368802899821595"
     """冻结包自检：依赖、路径、搜索、解析、真实下载"""
     import json
     import traceback
@@ -98,8 +105,8 @@ def _selftest():
             os.makedirs(sdir, exist_ok=True)     # cwd 必须已存在，否则 WinError 267
             cfg = {
                 "sid": "selftest", "vids": [vid], "sname": "T", "sdir": sdir,
-                "qual": "540p", "did": "11223344556677889900",
-                "iid": "99887766554433221100",
+                "qual": "540p", "did": _SELFTEST_DID,
+                "iid": _SELFTEST_IID,
                 "progress_file": os.path.join(sdir, "_progress.jsonl"),
                 "start_ep": 1, "eps": [1],
             }
