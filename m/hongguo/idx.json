@@ -1,0 +1,19 @@
+{
+ "format": 1,
+ "modules": [
+  {
+   "id": "hongguo",
+   "name": "红果",
+   "version": "1.0.13",
+   "description": "短剧 · 漫剧 · AI 剧 · 听书（水果刀优化版：多线路取流 + 官网兜底 + v1_ token 绕过）",
+   "api": 1,
+   "adult": false,
+   "repo": "wu798998264-crypto/fruitknife",
+   "tag": "v1.0.13",
+   "sha256": {
+    "manifest.json": "66d1137431287fdf1320b4b144cf3e87d75df5d2191c1ee1e9cefc8c5e3db2fb",
+    "main.js": "b981b1a2f65800eb8889fbcdc5296356d6ce9a58021fcf7efeeaa570503cc31d"
+   }
+  }
+ ]
+}
